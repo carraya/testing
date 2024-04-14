@@ -16,12 +16,19 @@ async def upload_file(file: UploadFile = File(...)):
         f.write(contents)
 
     # Preprocess the file
+    segments = []
+    documents = []
     if file.filename.endswith(".mp4"):
         segments = model.sentence_transcribe("data/" + file.filename)
-    else:
-        segments = []
+    elif file.filename.endswith(".pdf"):
+        documents = []
 
-    return {"status": "ok", "statusCode": 200, "segments": segments}
+    return {
+        "status": "ok",
+        "statusCode": 200,
+        "segments": segments,
+        "documents": documents,
+    }
 
 
 @app.delete("/delete")
@@ -47,7 +54,9 @@ async def get_orig_files():
 
 @app.get("/files/{filename}")
 async def get_file(filename: str):
+    # Only add the data folder if it is not already there
     file_path = os.path.join("data", filename)
+    print("Trying to get", file_path)
     if os.path.exists(file_path):
         with open(file_path, "rb") as f:
             contents = f.read()
