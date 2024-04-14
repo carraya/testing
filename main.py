@@ -5,6 +5,9 @@ import os
 from dotenv import load_dotenv
 from fastapi.responses import FileResponse
 from fastapi.testclient import TestClient
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+import json
 
 load_dotenv()
 
@@ -48,15 +51,26 @@ async def vectorize_and_upsert_video(video_params: VideoParams, file: UploadFile
 
 class QueryText(BaseModel):
     text: str
-    top_k: int = 3
+    top_k: int = 1
     filter: dict = None
 
 @app.post("/query_text/")
 async def query_text(query: QueryText):
     try:
         result = deposition_vectorizer.query_text(query.text, query.top_k, query.filter)
-        return result
+        # Ensure the result is JSON serializable
+        # return result.dict()  # If result is a Pydantic model
+        # OR
+        res = {
+            "time": result["matches"][0]["metadata"]["start"]
+        }
+        print(res)
+        res_json = jsonable_encoder(res)
+        return JSONResponse(content=res)  # If result is a Pydantic model and you prefer working with JSON
+        # If result is not a Pydantic model, you might need to manually convert it to a dict or a serializable structure
     except Exception as e:
+        # import traceback
+        # print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 from deposition_matcher import DepositionMatcher
