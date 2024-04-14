@@ -20,6 +20,7 @@ async def main():
 
     await deposition_vectorizer.vectorize_and_upsert_pdf("Zipcar_ Refining the Business Model.pdf")
     await deposition_vectorizer.vectorize_and_upsert_video("fridman_altman_podcast_sample.mp4")
+    
     # res = await deposition_vectorizer.query_text("How does GPT-7 relate to proofs?")
     # print(res)
 
