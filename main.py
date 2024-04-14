@@ -1,63 +1,81 @@
-import whisper
-from pyannote.audio import Pipeline
-from utils import diarize_text
-import torch
-from collections import namedtuple
-import time
-from moviepy.editor import VideoFileClip
+from fastapi import FastAPI, HTTPException, File, UploadFile
+from pydantic import BaseModel
+from deposition_vectorizer import DepositionVectorizer
+import os
+from dotenv import load_dotenv
+from fastapi.responses import FileResponse
+from fastapi.testclient import TestClient
 
-pipeline = Pipeline.from_pretrained(
-    "pyannote/speaker-diarization-3.1",
-    use_auth_token="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",
+load_dotenv()
+
+app = FastAPI()
+
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+TOGETHERAI_API_KEY = os.getenv("TOGETHERAI_API_KEY")
+
+deposition_vectorizer = DepositionVectorizer(
+    pinecone_index_name=PINECONE_INDEX_NAME,
+    pinecone_api_key=PINECONE_API_KEY,
+    togetherai_api_key=TOGETHERAI_API_KEY,
 )
-pipeline.to(torch.device("mps"))
 
-# Video
-video = VideoFileClip("fridman_altman_podcast_sample.mp4")
-video.audio.write_audiofile("test.wav")
-print("Audio extracted")
+class VideoParams(BaseModel):
+    window: int = 5
+    overlap: int = 1
 
-# Pyannote
-start = time.time()
-print("Starting diarization")
-diarization_result = pipeline("test.wav")
-print("Diarization took", time.time() - start, "seconds")
+@app.post("/vectorize_and_upsert_pdf/")
+async def vectorize_and_upsert_pdf(file: UploadFile = File(...)):
+    try:
+        file_location = f"temp/{file.filename}"
+        with open(file_location, "wb+") as file_object:
+            file_object.write(file.file.read())
+        deposition_vectorizer.vectorize_and_upsert_pdf(file_location)
+        return {"message": "PDF processed successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Whisper
-model = whisper.load_model("small.en")
-asr_result = model.transcribe(
-    "test.wav"
-    # "fridman_altman_podcast_sample.wav",
-    # initial_prompt="This audio is a conversation with keywords: AI, machine learning, deep learning, data science, LLMs.",
+@app.post("/vectorize_and_upsert_video/")
+async def vectorize_and_upsert_video(video_params: VideoParams, file: UploadFile = File(...)):
+    try:
+        file_location = f"temp/{file.filename}"
+        with open(file_location, "wb+") as file_object:
+            file_object.write(file.file.read())
+        deposition_vectorizer.vectorize_and_upsert_video(file_location, video_params.window, video_params.overlap)
+        return {"message": "Video processed successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class QueryText(BaseModel):
+    text: str
+    top_k: int = 3
+    filter: dict = None
+
+@app.post("/query_text/")
+async def query_text(query: QueryText):
+    try:
+        result = deposition_vectorizer.query_text(query.text, query.top_k, query.filter)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+from deposition_matcher import DepositionMatcher
+
+deposition_matcher = DepositionMatcher(
+    pinecone_index_name=PINECONE_INDEX_NAME,
+    pinecone_api_key=PINECONE_API_KEY,
+    togetherai_api_key=TOGETHERAI_API_KEY,
 )
-# print(asr_result)
 
-# Combine
-final_result = diarize_text(asr_result, diarization_result)
+class QueryVideo(BaseModel):
+    video_path: str
+    max_doc: int = 5
+    max_window: int = 3
 
-for seg, spk, sent in final_result:
-    line = f"{seg.start:.2f} {seg.end:.2f} {spk} {sent}"
-    print(line)
-# Interval = namedtuple("Interval", ["start", "end", "speaker"])
-# intervals = [
-#     Interval(start=turn.start, end=turn.end, speaker=speaker)
-#     for turn, _, speaker in diarization_result.itertracks(yield_label=True)
-# ]
-
-# i = 0
-# while i < len(intervals) - 1:
-#     if (
-#         intervals[i].speaker == intervals[i + 1].speaker
-#         and intervals[i + 1].start - intervals[i].end < 1
-#     ):
-#         intervals[i] = Interval(
-#             start=intervals[i].start,
-#             end=intervals[i + 1].end,
-#             speaker=intervals[i].speaker,
-#         )
-#         intervals.pop(i + 1)
-#     else:
-#         i += 1
-
-# for interval in intervals:
-#     print(interval)
+@app.post("/query_video/")
+async def query_video(query: QueryVideo):
+    try:
+        result = deposition_matcher.query(query.video_path, query.max_doc, query.max_window)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
