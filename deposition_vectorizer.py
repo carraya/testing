@@ -1,3 +1,5 @@
+import math
+import random
 from pinecone import Pinecone
 from llama_index.embeddings.together import TogetherEmbedding
 from llama_index.readers.file import PDFReader
@@ -28,14 +30,58 @@ class DepositionVectorizer:
         vectors = [{"id": node.node_id, "values": self.vectorize_text(node.get_content()), "metadata": {**node.metadata, "text": node.get_content()}} for node in nodes]
         self.index.upsert(vectors=vectors)
         
-    def vectorize_and_upsert_video(self, video_path):
+    def vectorize_and_upsert_video(self, video_path, window=5, overlap=1):
+        print("vectorize + upsert")
+
         res = self.query_text("a", top_k=1, filter={"video_path": {"$eq": video_path}})
         if (len(res["matches"]) > 0):
+          print("dup ski")
           return
+
         video_to_text = VideoToTextModel()
         text = video_to_text.sentence_transcribe(video_path)
-        vectors = [{"id": str(i), "values": self.vectorize_text(seg["text"]), "metadata": {"start": seg["start"], "end": seg["end"], "video_path": video_path, "text": seg["text"]}} for i, seg in enumerate(text)]
-        self.index.upsert(vectors=vectors)
+        vectors = []
+        prev_seg_ind_start = -1
+
+        max_duration = int(math.ceil(text[-1]["end"]))
+        for t0 in range(0, max_duration, window-overlap):
+            print(f"t: {t0}")
+
+            seg_ind_start = -1
+            for j, s in enumerate(text):
+                if s['start'] >= t0:
+                    seg_ind_start = j
+                    break
+            
+            if seg_ind_start <= max(-1, prev_seg_ind_start):
+                print("skip", seg_ind_start)
+                continue
+            
+            prev_seg_ind_start = seg_ind_start
+            seg_ind_end = seg_ind_start
+            while (text[seg_ind_end]['end']-text[seg_ind_start]['start']) < window and seg_ind_end < len(text)-1:
+                seg_ind_end += 1
+
+            seg_text = "\n".join([seg["text"] for seg in text[seg_ind_start:seg_ind_end+1]])
+            
+            print("VEC: ", seg_ind_start, seg_ind_end, seg_text)
+
+            vector = {
+                "id": str(random.random()).replace("0.", ""), 
+                "values": self.vectorize_text(seg_text),
+                "metadata": {
+                    "start": text[seg_ind_start]["start"],
+                    "end": text[seg_ind_end]["end"],
+                    "video_path": video_path,
+                    "text": seg_text 
+                },
+            }
+            vectors.append(vector)
+
+        if len(vectors) > 0:
+            self.index.upsert(vectors=vectors)
+        else:
+            print("no vectors")
       
     def vectorize_text(self, text):
         return self.embedder.get_text_embedding(text)
